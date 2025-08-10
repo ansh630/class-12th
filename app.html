@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>One-to-One Chat (Firebase)</title>
+
+  <style>
+    :root{--bg:#e5ddd5;--chatbg:#ffffff;--me:#dcf8c6;--other:#fff;--header:#075e54}
+    *{box-sizing:border-box;font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial}
+    html,body{height:100%;margin:0;background:var(--bg)}
+    .app{max-width:900px;margin:0 auto;height:100vh;display:flex;flex-direction:column;border-left:1px solid #ddd;border-right:1px solid #ddd;background:#fff}
+    header{padding:12px 14px;background:var(--header);color:#fff;display:flex;gap:12px;align-items:center}
+    header h1{font-size:18px;margin:0;flex:1}
+    header #backBtn{background:0;border:0;color:#fff;font-size:20px;cursor:pointer;display:none}
+    .container{flex:1;display:flex;min-height:0}
+    .sidebar{width:100%;padding:16px;background:#fafafa;border-right:1px solid #e6e6e6;display:flex;flex-direction:column;gap:16px}
+    .chat-area{flex:1;display:none;flex-direction:column}
+    .messages{flex:1;padding:16px;overflow:auto;background:var(--chatbg)}
+    .message{margin:8px 0;display:flex;flex-direction:column}
+    .message.me{align-items:flex-end}
+    .message.other{align-items:flex-start}
+    .bubble{max-width:80%;padding:10px 12px;border-radius:12px;box-shadow:0 1px 0 rgba(0,0,0,0.06);word-wrap:break-word}
+    .message.me .bubble{background:var(--me)}
+    .message.other .bubble{background:#fff}
+    .meta{font-size:11px;color:#666;margin-top:4px;padding:0 4px}
+    form.send{display:flex;padding:8px;border-top:1px solid #eee;background:#f7f7f7}
+    form.send input[type="text"]{flex:1;padding:12px;border-radius:20px;border:1px solid #ddd}
+    form.send button{margin-left:8px;padding:10px 14px;border-radius:50%;border:0;background:var(--header);color:#fff;cursor:pointer}
+    label{font-size:14px;color:#333;font-weight:600;display:block;margin-bottom:6px}
+    input{width:100%;padding:10px;border-radius:6px;border:1px solid #ccc}
+    button{padding:10px 14px;border-radius:6px;border:0;background:var(--header);color:#fff;cursor:pointer}
+    .hint{font-size:12px;color:#777;margin-top:8px}
+    
+    /* Responsive Breakpoint for Desktop View */
+    @media (min-width: 768px) {
+      .sidebar { width: 300px; display: flex !important; }
+      .chat-area { display: flex !important; }
+      header #backBtn { display: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <button id="backBtn">&larr;</button>
+      <h1>Chat</h1>
+      <span id="status" style="font-size:13px;opacity:.9">offline</span>
+    </header>
+
+    <div class="container">
+      <aside class="sidebar" id="sidebar">
+        <div>
+          <label for="myId">Your ID</label>
+          <div style="display:flex; gap: 8px;">
+            <input id="myId" placeholder="e.g. alice" />
+            <button id="btnRegister">Register</button>
+          </div>
+        </div>
+
+        <div>
+          <label for="peerId">Chat with (Peer ID)</label>
+          <div style="display:flex; gap: 8px;">
+            <input id="peerId" placeholder="e.g. bob" />
+            <button id="btnConnect">Connect</button>
+          </div>
+        </div>
+
+        <div class="hint">
+          Tip: Use simple IDs (alice, bob). The app creates a room by sorting the two IDs so both sides join the same room.
+        </div>
+
+        <hr style="margin:12px 0" />
+
+        <div style="flex: 1; display: flex; flex-direction: column; min-height: 0;">
+          <label>Local Logs</label>
+          <pre id="log" style="flex: 1; overflow:auto;background:#fff;padding:8px;border-radius:6px;border:1px solid #eee"></pre>
+        </div>
+      </aside>
+
+      <main class="chat-area" id="chatArea" role="main">
+        <div class="messages" id="messages">
+           <div style="text-align:center; color: #888; margin-top: 20px;">Register your ID and connect to a peer to start chatting.</div>
+        </div>
+
+        <form class="send" id="sendForm">
+          <input id="msgInput" type="text" placeholder="Type a message" autocomplete="off" disabled/>
+          <button type="submit" disabled>Send</button>
+        </form>
+      </main>
+    </div>
+  </div>
+
+  <!-- Firebase SDKs -->
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+
+  <script>
+    /***** REPLACE this with your Firebase config from console *****/
+    const firebaseConfig = {
+      apiKey: "YOUR_API_KEY",
+      authDomain: "YOUR_PROJECT.firebaseapp.com",
+      databaseURL: "https://YOUR_PROJECT.firebaseio.com",
+      projectId: "YOUR_PROJECT",
+      storageBucket: "YOUR_PROJECT.appspot.com",
+      messagingSenderId: "SENDER_ID",
+      appId: "APP_ID"
+    };
+    /*************************************************************/
+
+    // INIT
+    try {
+        firebase.initializeApp(firebaseConfig);
+    } catch(e) {
+        console.error("Firebase config is not valid, please update it.", e);
+        document.getElementById('status').textContent = "Config Error";
+    }
+    const db = firebase.database();
+
+    // UI refs
+    const myIdInput = document.getElementById('myId');
+    const btnRegister = document.getElementById('btnRegister');
+    const peerIdInput = document.getElementById('peerId');
+    const btnConnect = document.getElementById('btnConnect');
+    const messagesEl = document.getElementById('messages');
+    const sendForm = document.getElementById('sendForm');
+    const msgInput = document.getElementById('msgInput');
+    const statusEl = document.getElementById('status');
+    const logEl = document.getElementById('log');
+    const sidebar = document.getElementById('sidebar');
+    const chatArea = document.getElementById('chatArea');
+    const backBtn = document.getElementById('backBtn');
+
+    let myId = null;
+    let peerId = null;
+    let roomId = null;
+    let messagesRef = null;
+    let connected = false;
+
+    function log(msg){
+      const t = new Date().toLocaleTimeString();
+      logEl.textContent += `[${t}] ${msg}\n`;
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function makeRoom(a, b){
+      return [a, b].sort().join(':');
+    }
+
+    function clearMessages(){
+      messagesEl.innerHTML = '';
+    }
+
+    function addMessageToUI(data){
+      // data: { from, text, ts }
+      const isMe = data.from === myId;
+      const wrap = document.createElement('div');
+      wrap.className = 'message ' + (isMe ? 'me' : 'other');
+      
+      const bubble = document.createElement('div');
+      bubble.className = 'bubble';
+      bubble.textContent = data.text;
+      
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      const ts = data.ts ? new Date(data.ts) : new Date();
+      meta.textContent = `${data.from} • ${ts.toLocaleTimeString()}`;
+      
+      wrap.appendChild(bubble);
+      wrap.appendChild(meta);
+      messagesEl.appendChild(wrap);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    function showChatView() {
+        if (window.innerWidth < 768) {
+            sidebar.style.display = 'none';
+            backBtn.style.display = 'block';
+        }
+        chatArea.style.display = 'flex';
+        msgInput.disabled = false;
+        sendForm.querySelector('button').disabled = false;
+    }
+
+    function showSidebarView() {
+        if (window.innerWidth < 768) {
+            chatArea.style.display = 'none';
+            sidebar.style.display = 'flex';
+            backBtn.style.display = 'none';
+        }
+    }
+
+    // Register local ID (no auth, just name)
+    btnRegister.addEventListener('click', () => {
+      const val = myIdInput.value.trim();
+      if(!val){ log('Please enter your ID.'); return; }
+      myId = val;
+      myIdInput.disabled = true;
+      btnRegister.disabled = true;
+      statusEl.textContent = `Online: ${myId}`;
+      log(`Registered as ${myId}`);
+    });
+
+    // Connect to peer -> create room and start listening
+    btnConnect.addEventListener('click', async () => {
+      if(!myId){ log('Please register your ID first.'); return; }
+      const p = peerIdInput.value.trim();
+      if(!p){ log('Please enter a peer ID to connect.'); return; }
+      
+      try {
+        peerId = p;
+        roomId = makeRoom(myId, peerId);
+        
+        if(messagesRef) messagesRef.off(); // Detach old listener if any
+        clearMessages();
+        
+        messagesRef = db.ref('rooms/' + roomId + '/messages');
+        
+        messagesRef.limitToLast(200).on('child_added', snapshot => {
+          const val = snapshot.val();
+          if(!val) return;
+          if(messagesEl.querySelector('div[style*="text-align:center"]')) clearMessages();
+          addMessageToUI(val);
+        });
+        
+        connected = true;
+        statusEl.textContent = `Chat: ${peerId}`;
+        log(`Connected to room: ${roomId}`);
+        showChatView();
+      } catch (error) {
+        console.error("Connection failed:", error);
+        log(`Error connecting: ${error.message}`);
+      }
+    });
+
+    // Sending
+    sendForm.addEventListener('submit', e => {
+      e.preventDefault();
+      if(!connected || !roomId){ log('Not connected to any peer.'); return; }
+      const text = msgInput.value.trim();
+      if(!text) return;
+      const payload = { from: myId, text: text, ts: Date.now() };
+      
+      messagesRef.push(payload).then(() => {
+        msgInput.value = '';
+        log(`Sent: "${text}"`);
+      }).catch(err => {
+        console.error(err);
+        log('Send failed: ' + err.message);
+      });
+    });
+
+    backBtn.addEventListener('click', () => {
+        if (messagesRef) messagesRef.off();
+        connected = false;
+        statusEl.textContent = `Online: ${myId}`;
+        log(`Disconnected from room: ${roomId}`);
+        showSidebarView();
+    });
+
+    // Optional: remove listeners when page unloads
+    window.addEventListener('beforeunload', () => {
+      if(messagesRef) messagesRef.off();
+    });
+
+    // Small UX: allow Enter to send
+    msgInput.addEventListener('keydown', e => {
+      if(e.key === 'Enter' && !e.shiftKey){
+        e.preventDefault();
+        sendForm.requestSubmit();
+      }
+    });
+  </script>
+</body>
+</html>
